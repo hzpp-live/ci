@@ -9,7 +9,6 @@ For development, copy `.env.example` to `.env` and fill in the values.
 ```env
 PORT=3000
 PUBLIC_URL=https://ci.example.com
-POLL_INTERVAL_MS=300000
 VITE_LOGO_URL=https://example.com/logo.webp
 VITE_FAVICON_URL=https://example.com/favicon.ico
 
@@ -65,7 +64,7 @@ Enable only these repository events:
 - `Workflow run`
 - `Workflow job`
 
-The server also reconciles periodically using `POLL_INTERVAL_MS` in case a delivery is missed.
+The initial load is cached indefinitely. Later changes are applied from workflow webhooks.
 
 ### Finish creation and installation
 

@@ -1,4 +1,4 @@
-import { github, GitHubWorkflowJobsSchema, GitHubWorkflowListSchema, GitHubWorkflowRunsSchema, } from './github-app';
+import { github, GitHubWorkflowJobsSchema, GitHubWorkflowListSchema, GitHubWorkflowRunSchema, GitHubWorkflowRunsSchema, } from './github-app';
 import { AccessValidationSchema, config, repositoryConfig, } from './config';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer as createViteServer } from 'vite';
@@ -49,7 +49,7 @@ const maxWebhookBodyBytes = 1_000_000;
 const deliveryRetentionMs = 10 * 60 * 1000;
 
 const port = 3000;
-const { GITHUB_WEBHOOK_SECRET: webhookSecret, POLL_INTERVAL_MS: pollInterval } = config;
+const { GITHUB_WEBHOOK_SECRET: webhookSecret } = config;
 const configuredRepositories: ConfiguredRepository[] = repositoryConfig.map((item) => ({
 	repo: typeof item === 'string' ? item : item.repo,
 	name: typeof item === 'string' ? item : item.name,
@@ -58,19 +58,20 @@ const configuredRepositories: ConfiguredRepository[] = repositoryConfig.map((ite
 const configuredRepositoryNames = new Set(configuredRepositories.map((repository) => repository.repo));
 
 const WebhookPayloadSchema = z.object({
-	action: z.enum([
-		'completed',
-		'in_progress',
-		'queued',
-		'requested',
-		'waiting',
-	]),
+	action: z.string().min(1),
 	repository: z.object({
 		full_name: z.string().min(1),
 	}),
+	workflow_run: z.object({
+		id: z.number(),
+		workflow_id: z.number(),
+	}).optional(),
+	workflow_job: z.object({
+		run_id: z.number(),
+		workflow_id: z.number(),
+	}).optional(),
 });
 
-let cacheGeneration = 0;
 let stateRefresh: Promise<InternalState> | undefined;
 let cached: { at: number; body: InternalState } | undefined;
 
@@ -97,74 +98,133 @@ export function matchesDashboardAccess(provided: string) {
 }
 
 export async function refreshState() {
-	const generation = cacheGeneration;
-	const configured = configuredRepositories;
-
-	if (cached && Date.now() - cached.at < pollInterval) {
-		return cached.body;
-	}
-
-	const workflows: WorkflowState[] = [];
-	for (const configuredRepo of configured) {
-		const repo = configuredRepo.repo;
-		const workflowList = await github(`/repos/${repo}/actions/workflows?per_page=100`, GitHubWorkflowListSchema);
-
-		for (const workflow of workflowList.workflows ?? []) {
-			const runs = await github(`/repos/${repo}/actions/workflows/${workflow.id}/runs?per_page=1`, GitHubWorkflowRunsSchema);
-			const run = runs.workflow_runs?.[0];
-			if (!run) continue;
-
-			const jobs = await github(`/repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, GitHubWorkflowJobsSchema);
-			const jobList = jobs.jobs ?? [];
-
-			const completed = jobList.filter((job) => job.status === 'completed').length;
-			const steps = jobList.flatMap((job) => job.steps ?? []);
-			const completedSteps = steps.filter((step) => step.status === 'completed').length;
-
-			const progress = steps.length
-				? Math.round((completedSteps / steps.length) * 100)
-				: jobList.length
-					? Math.round((completed / jobList.length) * 100)
-					: null;
-
-			workflows.push({
-				id: workflow.id,
-				name: workflow.name,
-				path: workflow.path,
-				repo,
-				status: run.status,
-				conclusion: run.conclusion,
-				branch: run.head_branch ?? '',
-				event: run.event,
-				updatedAt: run.updated_at,
-				runUrl: run.html_url,
-				progress,
-			});
-		}
-	}
-
-	const body = {
-		workflows,
-		updatedAt: new Date().toISOString(),
-		repositories: configured,
-	};
-
-	if (generation !== cacheGeneration) return refreshState();
-	cached = { at: Date.now(), body };
-
-	return body;
-}
-
-async function getState() {
-	if (cached && Date.now() - cached.at < pollInterval) return cached.body;
+	if (cached) return cached.body;
 	if (stateRefresh) return stateRefresh;
 
-	stateRefresh = refreshState();
+	stateRefresh = (async () => {
+		const startedAt = Date.now();
+		const workflows: WorkflowState[] = [];
+		console.info(`Loading workflow state for ${configuredRepositories.length} configured repositories.`);
+
+		for (const configuredRepo of configuredRepositories) {
+			console.info(`Fetching workflow definitions for ${configuredRepo.name}.`);
+			const workflowList = await github(`/repos/${configuredRepo.repo}/actions/workflows?per_page=100`, GitHubWorkflowListSchema);
+
+			for (const workflow of workflowList.workflows ?? []) {
+				const runs = await github(`/repos/${configuredRepo.repo}/actions/workflows/${workflow.id}/runs?per_page=1`, GitHubWorkflowRunsSchema);
+				const run = runs.workflow_runs?.[0];
+				if (!run) continue;
+
+				const jobs = await github(`/repos/${configuredRepo.repo}/actions/runs/${run.id}/jobs?per_page=100`, GitHubWorkflowJobsSchema);
+				const jobList = jobs.jobs ?? [];
+				const completed = jobList.filter((job) => job.status === 'completed').length;
+				const steps = jobList.flatMap((job) => job.steps ?? []);
+				const completedSteps = steps.filter((step) => step.status === 'completed').length;
+				const progress = steps.length
+					? Math.round((completedSteps / steps.length) * 100)
+					: jobList.length
+						? Math.round((completed / jobList.length) * 100)
+						: null;
+
+				workflows.push({
+					id: workflow.id,
+					name: workflow.name,
+					path: workflow.path,
+					repo: configuredRepo.repo,
+					status: run.status,
+					conclusion: run.conclusion,
+					branch: run.head_branch ?? '',
+					event: run.event,
+					updatedAt: run.updated_at,
+					runUrl: run.html_url,
+					progress,
+				});
+			}
+		}
+
+		const body: InternalState = {
+			workflows,
+			updatedAt: new Date().toISOString(),
+			repositories: configuredRepositories,
+		};
+		cached = { at: Date.now(), body };
+		console.info(`Loaded ${workflows.length} workflows in ${Date.now() - startedAt}ms.`);
+		return body;
+	})();
+
 	try {
 		return await stateRefresh;
 	} finally {
 		stateRefresh = undefined;
 	}
+}
+
+async function getState() {
+	return cached?.body ?? (await refreshState());
+}
+
+async function refreshWorkflowFromWebhook(
+	repo: string,
+	workflowId: number,
+	runId?: number,
+) {
+	if (!cached) await refreshState();
+	if (!cached) return;
+
+	const configuredRepo = configuredRepositories.find((item) => item.repo === repo);
+	const existing = cached.body.workflows.find((workflow) => workflow.repo === repo && workflow.id === workflowId);
+
+	if (!configuredRepo || !existing) {
+		console.info(`The webhook references a new workflow in ${repo}; loading the full state.`);
+		cached = undefined;
+		await refreshState();
+		broadcast();
+		return;
+	}
+
+	const run = runId
+		? await github(`/repos/${repo}/actions/runs/${runId}`, GitHubWorkflowRunSchema)
+		: (await github(`/repos/${repo}/actions/workflows/${workflowId}/runs?per_page=1`, GitHubWorkflowRunsSchema)).workflow_runs?.[0];
+
+	if (!run || !cached) return;
+
+	const jobs = await github(`/repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, GitHubWorkflowJobsSchema);
+	const jobList = jobs.jobs ?? [];
+	const completed = jobList.filter((job) => job.status === 'completed').length;
+
+	const steps = jobList.flatMap((job) => job.steps ?? []);
+	const completedSteps = steps.filter((step) => step.status === 'completed').length;
+
+	const progress = steps.length
+		? Math.round((completedSteps / steps.length) * 100)
+		: jobList.length
+			? Math.round((completed / jobList.length) * 100)
+			: null;
+
+	const updated: WorkflowState = {
+		...existing,
+		status: run.status,
+		conclusion: run.conclusion,
+		branch: run.head_branch ?? '',
+		event: run.event,
+		updatedAt: run.updated_at,
+		runUrl: run.html_url,
+		progress,
+	};
+
+	cached = {
+		at: Date.now(),
+		body: {
+			...cached.body,
+			updatedAt: new Date().toISOString(),
+			workflows: cached.body.workflows.map((workflow) =>
+				workflow.repo === repo && workflow.id === workflowId ? updated : workflow,
+			),
+		},
+	};
+
+	console.info(`Updated workflow ${workflowId} in ${configuredRepo.name}.`);
+	broadcast();
 }
 
 function isDuplicateDelivery(deliveryId: string) {
@@ -370,13 +430,17 @@ const server = createServer(async (req, res) => {
 		}
 
 		const event = req.headers['x-github-event'];
+		console.info(`Received GitHub ${event ?? 'unknown'} webhook delivery ${normalizedDeliveryId}.`);
+
 		if (event === 'ping') {
+			console.info('Responded to GitHub ping with pong.');
 			res.statusCode = 200;
 			res.end('pong');
 			return;
 		}
 
 		if (isDuplicateDelivery(normalizedDeliveryId)) {
+			console.info(`Rejected duplicate GitHub webhook delivery ${normalizedDeliveryId}.`);
 			res.statusCode = 202;
 			res.end('Already accepted');
 			return;
@@ -400,14 +464,34 @@ const server = createServer(async (req, res) => {
 			}
 
 			if (!configuredRepositoryNames.has(parsedPayload.data.repository.full_name)) {
+				console.warn(`Rejected webhook from unconfigured repository ${parsedPayload.data.repository.full_name}.`);
 				res.statusCode = 403;
 				res.end('Repository is not configured');
 				return;
 			}
 
-			cacheGeneration += 1;
-			cached = undefined;
-			broadcast();
+			const workflowId = event === 'workflow_run'
+				? parsedPayload.data.workflow_run?.workflow_id
+				: parsedPayload.data.workflow_job?.workflow_id;
+
+			const runId = event === 'workflow_job'
+				? parsedPayload.data.workflow_job?.run_id
+				: undefined;
+
+			if (!workflowId) {
+				res.statusCode = 400;
+				res.end('Invalid workflow webhook payload');
+				return;
+			}
+
+			console.info(`Accepted ${event} for ${parsedPayload.data.repository.full_name}; updating workflow ${workflowId}.`);
+			void refreshWorkflowFromWebhook(
+				parsedPayload.data.repository.full_name,
+				workflowId,
+				runId,
+			).catch((error: unknown) => {
+				console.error('Failed to update workflow from webhook.', error);
+			});
 		}
 
 		res.statusCode = 202;

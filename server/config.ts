@@ -13,7 +13,6 @@ const EnvironmentSchema = z.object({
 	
 	PUBLIC_URL: z.url(),
 	REPOSITORIES_JSON: z.string().trim().min(1).max(100_000),
-	POLL_INTERVAL_MS: z.coerce.number().int().min(1000).default(300000),
 });
 
 const RepositoryEntrySchema = z.union([

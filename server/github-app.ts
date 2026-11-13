@@ -11,17 +11,21 @@ export const GitHubWorkflowListSchema = z.object({
 	})).optional(),
 });
 
-export const GitHubWorkflowRunsSchema = z.object({
-	workflow_runs: z.array(z.object({
-		id: z.number(),
-		status: z.string(),
-		conclusion: z.string().nullable(),
-		head_branch: z.string().nullable(),
-		event: z.string(),
-		updated_at: z.string(),
-		html_url: z.string().url(),
-	})).optional(),
+const GitHubWorkflowRunSchema = z.object({
+	id: z.number(),
+	status: z.string(),
+	conclusion: z.string().nullable(),
+	head_branch: z.string().nullable(),
+	event: z.string(),
+	updated_at: z.string(),
+	html_url: z.string().url(),
 });
+
+export const GitHubWorkflowRunsSchema = z.object({
+	workflow_runs: z.array(GitHubWorkflowRunSchema).optional(),
+});
+
+export { GitHubWorkflowRunSchema };
 
 export const GitHubWorkflowJobsSchema = z.object({
 	jobs: z.array(z.object({
@@ -65,6 +69,8 @@ async function installationToken(forceRefresh = false) {
 		signal: AbortSignal.timeout(15_000),
 	});
 
+	console.info(`The GitHub installation-token request returned status ${response.status}.`);
+
 	if (!response.ok) {
 		console.error(`GitHub App token request failed (${response.status})`);
 		throw new Error('GitHub App token request failed');
@@ -82,6 +88,8 @@ async function installationToken(forceRefresh = false) {
 
 export async function github<TResponse>(path: string, schema: z.ZodType<TResponse>) {
 	let token = await installationToken();
+	console.info(`Requesting ${path} from GitHub.`);
+
 	let response = await fetch(`https://api.github.com${path}`, {
 		headers: {
 			Accept: 'application/vnd.github+json',
@@ -91,6 +99,8 @@ export async function github<TResponse>(path: string, schema: z.ZodType<TRespons
 	});
 
 	if (response.status === 401) {
+		console.warn(`The GitHub token expired while requesting ${path}; requesting a new token.`);
+
 		token = await installationToken(true);
 		response = await fetch(`https://api.github.com${path}`, {
 			headers: {
@@ -102,8 +112,8 @@ export async function github<TResponse>(path: string, schema: z.ZodType<TRespons
 	}
 
 	if (!response.ok) {
-		console.error(`GitHub request failed (${response.status})`);
-		throw new Error('GitHub request failed');
+		console.error(`GitHub returned status ${response.status} while requesting ${path}.`);
+		throw new Error(`GitHub request failed (${response.status})`);
 	}
 
 	return schema.parse(await response.json());
