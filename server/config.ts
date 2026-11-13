@@ -13,6 +13,7 @@ const EnvironmentSchema = z.object({
 	
 	PUBLIC_URL: z.url(),
 	REPOSITORIES_JSON: z.string().trim().min(1).max(100_000),
+	ACTIVE_WORKFLOW_REFRESH_MS: z.coerce.number().int().min(5000).default(15000),
 });
 
 const RepositoryEntrySchema = z.union([

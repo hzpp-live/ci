@@ -64,7 +64,7 @@ Enable only these repository events:
 - `Workflow run`
 - `Workflow job`
 
-The initial load is cached indefinitely. Later changes are applied from workflow webhooks.
+The initial load is cached indefinitely. Later changes are applied from workflow webhooks. Active workflows are refreshed every `ACTIVE_WORKFLOW_REFRESH_MS` milliseconds so step progress stays current; the refresh stops when the run completes.
 
 ### Finish creation and installation
 

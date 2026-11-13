@@ -49,7 +49,10 @@ const maxWebhookBodyBytes = 1_000_000;
 const deliveryRetentionMs = 10 * 60 * 1000;
 
 const port = 3000;
-const { GITHUB_WEBHOOK_SECRET: webhookSecret } = config;
+const {
+	ACTIVE_WORKFLOW_REFRESH_MS: activeWorkflowRefreshMs,
+	GITHUB_WEBHOOK_SECRET: webhookSecret,
+} = config;
 const configuredRepositories: ConfiguredRepository[] = repositoryConfig.map((item) => ({
 	repo: typeof item === 'string' ? item : item.repo,
 	name: typeof item === 'string' ? item : item.name,
@@ -78,6 +81,7 @@ let cached: { at: number; body: InternalState } | undefined;
 const eventClients = new Set<ServerResponse>();
 const processedDeliveries = new Map<string, number>();
 const accessAttempts = new Map<string, { count: number; resetAt: number }>();
+const activeWorkflowRefreshes = new Map<string, NodeJS.Timeout>();
 
 export function repositoryId(repo: string) {
 	return createHmac('sha256', config.DASHBOARD_ACCESS_SECRET)
@@ -95,6 +99,28 @@ export function matchesDashboardAccess(provided: string) {
 	const actual = Buffer.from(provided);
 
 	return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function scheduleActiveWorkflowRefresh(workflow: WorkflowState) {
+	const key = `${workflow.repo}:${workflow.id}`;
+	const existing = activeWorkflowRefreshes.get(key);
+	if (workflow.status === 'completed') {
+		if (existing) clearTimeout(existing);
+		activeWorkflowRefreshes.delete(key);
+		return;
+	}
+
+	if (existing) return;
+
+	const timer = setTimeout(() => {
+		activeWorkflowRefreshes.delete(key);
+		void refreshWorkflowFromWebhook(workflow.repo, workflow.id).catch((error: unknown) => {
+			console.error(`Failed to refresh active workflow ${workflow.id}.`, error);
+			scheduleActiveWorkflowRefresh(workflow);
+		});
+	}, activeWorkflowRefreshMs);
+	timer.unref();
+	activeWorkflowRefreshes.set(key, timer);
 }
 
 export async function refreshState() {
@@ -148,6 +174,7 @@ export async function refreshState() {
 			repositories: configuredRepositories,
 		};
 		cached = { at: Date.now(), body };
+		for (const workflow of workflows) scheduleActiveWorkflowRefresh(workflow);
 		console.info(`Loaded ${workflows.length} workflows in ${Date.now() - startedAt}ms.`);
 		return body;
 	})();
@@ -223,6 +250,7 @@ async function refreshWorkflowFromWebhook(
 		},
 	};
 
+	scheduleActiveWorkflowRefresh(updated);
 	console.info(`Updated workflow ${workflowId} in ${configuredRepo.name}.`);
 	broadcast();
 }
