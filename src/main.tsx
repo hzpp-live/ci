@@ -1,7 +1,7 @@
 import { createRoot } from 'react-dom/client';
+import { loadFrontendConfig } from './env';
 import { StrictMode } from 'react';
 import App from './App';
-import { loadFrontendConfig } from './env';
 import './styles.css';
 
 async function bootstrap() {

@@ -1,25 +1,15 @@
+import { github, GitHubWorkflowJobsSchema, GitHubWorkflowListSchema, GitHubWorkflowRunsSchema, } from './github-app';
+import { AccessValidationSchema, config, repositoryConfig, } from './config';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
-import { createServer } from 'node:http';
-import type { ServerResponse } from 'node:http';
-import { resolve } from 'node:path';
 import { createServer as createViteServer } from 'vite';
-import { z } from 'zod';
+import type { IncomingMessage } from 'node:http';
+import type { ServerResponse } from 'node:http';
+import { createServer } from 'node:http';
+import { resolve } from 'node:path';
 import sirv from 'sirv';
-import {
-	AccessValidationSchema,
-	config,
-	dashboardAccessSecret,
-	repositoryConfig,
-} from './config';
-import {
-	github,
-	GitHubWorkflowJobsSchema,
-	GitHubWorkflowListSchema,
-	GitHubWorkflowRunsSchema,
-} from './github-app';
+import { z } from 'zod';
 
-type WorkflowState = {
+export type WorkflowState = {
 	id: number;
 	name: string;
 	path: string;
@@ -33,22 +23,22 @@ type WorkflowState = {
 	progress: number | null;
 };
 
-type PublicWorkflowState = Omit<WorkflowState, 'repo' | 'runUrl'> & {
+export type PublicWorkflowState = Omit<WorkflowState, 'repo' | 'runUrl'> & {
 	repositoryId: string;
 	runUrl?: string;
 };
 
-type PublicRepositoryState = {
+export type PublicRepositoryState = {
 	id: string;
 	name: string;
 };
 
-type ConfiguredRepository = {
+export type ConfiguredRepository = {
 	repo: string;
 	name: string;
 };
 
-type InternalState = {
+export type InternalState = {
 	workflows: WorkflowState[];
 	repositories: ConfiguredRepository[];
 	updatedAt: string;
@@ -59,18 +49,14 @@ const maxWebhookBodyBytes = 1_000_000;
 const deliveryRetentionMs = 10 * 60 * 1000;
 
 const port = 3000;
-const { GITHUB_WEBHOOK_SECRET: webhookSecret, POLL_INTERVAL_MS: pollInterval } =
-	config;
+const { GITHUB_WEBHOOK_SECRET: webhookSecret, POLL_INTERVAL_MS: pollInterval } = config;
+const configuredRepositories: ConfiguredRepository[] = repositoryConfig.map((item) => ({
+	repo: typeof item === 'string' ? item : item.repo,
+	name: typeof item === 'string' ? item : item.name,
+}));
 
-const configuredRepositories: ConfiguredRepository[] = repositoryConfig.map(
-	(item) => ({
-		repo: typeof item === 'string' ? item : item.repo,
-		name: typeof item === 'string' ? item : item.name,
-	}),
-);
-const configuredRepositoryNames = new Set(
-	configuredRepositories.map((repository) => repository.repo),
-);
+const configuredRepositoryNames = new Set(configuredRepositories.map((repository) => repository.repo));
+
 const WebhookPayloadSchema = z.object({
 	action: z.enum([
 		'completed',
@@ -84,33 +70,33 @@ const WebhookPayloadSchema = z.object({
 	}),
 });
 
-let cached: { at: number; body: InternalState } | undefined;
+let cacheGeneration = 0;
 let stateRefresh: Promise<InternalState> | undefined;
+let cached: { at: number; body: InternalState } | undefined;
+
+const eventClients = new Set<ServerResponse>();
 const processedDeliveries = new Map<string, number>();
 const accessAttempts = new Map<string, { count: number; resetAt: number }>();
-let cacheGeneration = 0;
-const eventClients = new Set<ServerResponse>();
 
-function repositoryId(repo: string) {
-	return createHmac('sha256', dashboardAccessSecret)
+export function repositoryId(repo: string) {
+	return createHmac('sha256', config.DASHBOARD_ACCESS_SECRET)
 		.update(repo)
 		.digest('hex');
 }
 
-function hasDashboardAccess(header: string | string[] | undefined) {
+export function hasDashboardAccess(header: string | string[] | undefined) {
 	const provided = Array.isArray(header) ? header[0] : header;
 	return provided ? matchesDashboardAccess(provided) : false;
 }
 
-function matchesDashboardAccess(provided: string) {
-	const expected = Buffer.from(dashboardAccessSecret);
+export function matchesDashboardAccess(provided: string) {
+	const expected = Buffer.from(config.DASHBOARD_ACCESS_SECRET);
 	const actual = Buffer.from(provided);
-	return (
-		expected.length === actual.length && timingSafeEqual(expected, actual)
-	);
+
+	return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-async function refreshState() {
+export async function refreshState() {
 	const generation = cacheGeneration;
 	const configured = configuredRepositories;
 
@@ -121,36 +107,26 @@ async function refreshState() {
 	const workflows: WorkflowState[] = [];
 	for (const configuredRepo of configured) {
 		const repo = configuredRepo.repo;
-		const workflowList = await github(
-			`/repos/${repo}/actions/workflows?per_page=100`,
-			GitHubWorkflowListSchema,
-		);
+		const workflowList = await github(`/repos/${repo}/actions/workflows?per_page=100`, GitHubWorkflowListSchema);
 
 		for (const workflow of workflowList.workflows ?? []) {
-			const runs = await github(
-				`/repos/${repo}/actions/workflows/${workflow.id}/runs?per_page=1`,
-				GitHubWorkflowRunsSchema,
-			);
+			const runs = await github(`/repos/${repo}/actions/workflows/${workflow.id}/runs?per_page=1`, GitHubWorkflowRunsSchema);
 			const run = runs.workflow_runs?.[0];
 			if (!run) continue;
 
-			const jobs = await github(
-				`/repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`,
-				GitHubWorkflowJobsSchema,
-			);
+			const jobs = await github(`/repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, GitHubWorkflowJobsSchema);
 			const jobList = jobs.jobs ?? [];
-			const completed = jobList.filter(
-				(job) => job.status === 'completed',
-			).length;
+
+			const completed = jobList.filter((job) => job.status === 'completed').length;
 			const steps = jobList.flatMap((job) => job.steps ?? []);
-			const completedSteps = steps.filter(
-				(step) => step.status === 'completed',
-			).length;
+			const completedSteps = steps.filter((step) => step.status === 'completed').length;
+
 			const progress = steps.length
 				? Math.round((completedSteps / steps.length) * 100)
 				: jobList.length
 					? Math.round((completed / jobList.length) * 100)
 					: null;
+
 			workflows.push({
 				id: workflow.id,
 				name: workflow.name,
@@ -166,24 +142,21 @@ async function refreshState() {
 			});
 		}
 	}
+
 	const body = {
 		workflows,
 		updatedAt: new Date().toISOString(),
 		repositories: configured,
 	};
-	if (generation !== cacheGeneration) {
-		return refreshState();
-	}
+
+	if (generation !== cacheGeneration) return refreshState();
 	cached = { at: Date.now(), body };
 
 	return body;
 }
 
 async function getState() {
-	if (cached && Date.now() - cached.at < pollInterval) {
-		return cached.body;
-	}
-
+	if (cached && Date.now() - cached.at < pollInterval) return cached.body;
 	if (stateRefresh) return stateRefresh;
 
 	stateRefresh = refreshState();
@@ -207,6 +180,7 @@ function isDuplicateDelivery(deliveryId: string) {
 		const oldest = processedDeliveries.keys().next().value;
 		if (oldest) processedDeliveries.delete(oldest);
 	}
+
 	processedDeliveries.set(deliveryId, now);
 	return false;
 }
@@ -214,6 +188,7 @@ function isDuplicateDelivery(deliveryId: string) {
 function canValidateAccess(address: string) {
 	const now = Date.now();
 	const current = accessAttempts.get(address);
+
 	if (!current || current.resetAt <= now) {
 		accessAttempts.set(address, { count: 1, resetAt: now + 900_000 });
 		return true;
@@ -256,13 +231,12 @@ function publicState(state: InternalState, includeRunUrls: boolean) {
 }
 
 const production = process.env.NODE_ENV === 'production';
-const vite = production
-	? undefined
-	: await createViteServer({
-			root,
-			server: { middlewareMode: true },
-			appType: 'spa',
-		});
+const vite = production ? undefined : await createViteServer({
+	root,
+	server: { middlewareMode: true },
+	appType: 'spa',
+});
+
 const staticFiles = sirv(resolve(root, 'dist'), { single: true });
 
 function readBody(req: IncomingMessage) {
@@ -270,6 +244,7 @@ function readBody(req: IncomingMessage) {
 		let body = '';
 		let size = 0;
 		let rejected = false;
+
 		req.setEncoding('utf8');
 		req.on('data', (chunk: string) => {
 			size += Buffer.byteLength(chunk, 'utf8');
@@ -278,38 +253,32 @@ function readBody(req: IncomingMessage) {
 				reject(new Error('Webhook payload is too large'));
 				return;
 			}
+
 			body += chunk;
 		});
+
 		req.on('end', () => {
 			if (!rejected) resolveBody(body);
 		});
+
 		req.on('error', reject);
 	});
 }
 
-function validSignature(
-	body: string,
-	signatureHeader: string | string[] | undefined,
-) {
-	const signature = Array.isArray(signatureHeader)
-		? signatureHeader[0]
-		: signatureHeader;
+export function validSignature(body: string, signatureHeader: string | string[] | undefined) {
+	const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
 	if (!webhookSecret || !signature?.startsWith('sha256=')) return false;
-	const expected = Buffer.from(
-		`sha256=${createHmac('sha256', webhookSecret).update(body).digest('hex')}`,
-	);
+
+	const expected = Buffer.from(`sha256=${createHmac('sha256', webhookSecret).update(body).digest('hex')}`);
 	const actual = Buffer.from(signature);
-	return (
-		expected.length === actual.length && timingSafeEqual(expected, actual)
-	);
+
+	return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-function broadcast() {
+export function broadcast() {
 	for (const client of eventClients) {
 		try {
-			client.write(
-				`data: ${JSON.stringify({ updatedAt: new Date().toISOString() })}\n\n`,
-			);
+			client.write(`data: ${JSON.stringify({ updatedAt: new Date().toISOString() })}\n\n`);
 		} catch {
 			eventClients.delete(client);
 			client.end();
@@ -317,14 +286,11 @@ function broadcast() {
 	}
 }
 
-function setSecurityHeaders(res: ServerResponse) {
+export function setSecurityHeaders(res: ServerResponse) {
 	res.setHeader('X-Content-Type-Options', 'nosniff');
 	res.setHeader('X-Frame-Options', 'DENY');
 	res.setHeader('Referrer-Policy', 'no-referrer');
-	res.setHeader(
-		'Permissions-Policy',
-		'camera=(), microphone=(), geolocation=()',
-	);
+	res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 }
 
 const heartbeat = setInterval(() => {
@@ -336,7 +302,7 @@ const heartbeat = setInterval(() => {
 			client.end();
 		}
 	}
-}, 25_000);
+}, 25000);
 heartbeat.unref();
 
 const server = createServer(async (req, res) => {
@@ -347,27 +313,31 @@ const server = createServer(async (req, res) => {
 			res.end('Too many event clients');
 			return;
 		}
+
 		res.writeHead(200, {
 			'Content-Type': 'text/event-stream',
 			'Cache-Control': 'no-cache',
 			Connection: 'keep-alive',
 			'X-Accel-Buffering': 'no',
 		});
+
 		res.write(': connected\n\n');
 		eventClients.add(res);
+
 		req.on('close', () => eventClients.delete(res));
 		return;
 	}
+
 	if (req.method === 'GET' && req.url === '/api/config') {
 		res.setHeader('Content-Type', 'application/json');
-		res.end(
-			JSON.stringify({
-				logoUrl: config.VITE_LOGO_URL,
-				faviconUrl: config.VITE_FAVICON_URL,
-			}),
-		);
+		res.end(JSON.stringify({
+			logoUrl: config.VITE_LOGO_URL,
+			faviconUrl: config.VITE_FAVICON_URL,
+		}));
+
 		return;
 	}
+
 	if (req.method === 'POST' && req.url === '/api/github/webhook') {
 		const contentLength = Number(req.headers['content-length']);
 		if (Number.isFinite(contentLength) && contentLength > maxWebhookBodyBytes) {
@@ -390,26 +360,28 @@ const server = createServer(async (req, res) => {
 			res.end('Invalid webhook signature');
 			return;
 		}
+
 		const deliveryId = req.headers['x-github-delivery'];
-		const normalizedDeliveryId = Array.isArray(deliveryId)
-			? deliveryId[0]
-			: deliveryId;
+		const normalizedDeliveryId = Array.isArray(deliveryId) ? deliveryId[0] : deliveryId;
 		if (!normalizedDeliveryId) {
 			res.statusCode = 400;
 			res.end('Missing webhook delivery ID');
 			return;
 		}
+
 		const event = req.headers['x-github-event'];
 		if (event === 'ping') {
 			res.statusCode = 200;
 			res.end('pong');
 			return;
 		}
+
 		if (isDuplicateDelivery(normalizedDeliveryId)) {
 			res.statusCode = 202;
 			res.end('Already accepted');
 			return;
 		}
+
 		if (event === 'workflow_run' || event === 'workflow_job') {
 			let payload: unknown;
 			try {
@@ -419,25 +391,30 @@ const server = createServer(async (req, res) => {
 				res.end('Invalid webhook payload');
 				return;
 			}
+
 			const parsedPayload = WebhookPayloadSchema.safeParse(payload);
 			if (!parsedPayload.success) {
 				res.statusCode = 400;
 				res.end('Invalid webhook payload');
 				return;
 			}
+
 			if (!configuredRepositoryNames.has(parsedPayload.data.repository.full_name)) {
 				res.statusCode = 403;
 				res.end('Repository is not configured');
 				return;
 			}
+
 			cacheGeneration += 1;
 			cached = undefined;
 			broadcast();
 		}
+
 		res.statusCode = 202;
 		res.end('Accepted');
 		return;
 	}
+
 	if (req.method === 'POST' && req.url === '/api/access/validate') {
 		if (!canValidateAccess(req.socket.remoteAddress ?? 'unknown')) {
 			res.statusCode = 429;
@@ -445,6 +422,7 @@ const server = createServer(async (req, res) => {
 			res.end(JSON.stringify({ valid: false }));
 			return;
 		}
+
 		let body: string;
 		try {
 			body = await readBody(req);
@@ -462,42 +440,44 @@ const server = createServer(async (req, res) => {
 		}
 
 		const validation = AccessValidationSchema.safeParse(parsedBody);
-		const valid =
-			validation.success && matchesDashboardAccess(validation.data.secret);
+		const valid = validation.success && matchesDashboardAccess(validation.data.secret);
+
 		res.setHeader('Content-Type', 'application/json');
 		res.end(JSON.stringify({ valid }));
 		return;
 	}
+
 	if (req.method === 'GET' && req.url === '/api/state') {
 		try {
 			const state = await getState();
-			const includeRunUrls = hasDashboardAccess(
-				req.headers['x-ci-access-secret'],
-			);
+			const includeRunUrls = hasDashboardAccess(req.headers['x-ci-access-secret']);
+
 			res.setHeader('Content-Type', 'application/json');
 			res.end(JSON.stringify(publicState(state, includeRunUrls)));
 		} catch (error) {
 			console.error(error);
 			res.statusCode = 502;
 			res.setHeader('Content-Type', 'application/json');
-			res.end(
-				JSON.stringify({
-					workflows: [],
-					repositories: [],
-					updatedAt: new Date().toISOString(),
-					error: 'GitHub request failed',
-				}),
-			);
+			res.end(JSON.stringify({
+				workflows: [],
+				repositories: [],
+				updatedAt: new Date().toISOString(),
+				error: 'GitHub request failed',
+			}));
 		}
+
 		return;
 	}
+
 	if (vite) {
 		vite.middlewares(req, res, () => {
 			res.statusCode = 404;
 			res.end('Not found');
 		});
+
 		return;
 	}
+	
 	staticFiles(req, res, () => {
 		res.statusCode = 404;
 		res.end('Not found');

@@ -145,6 +145,7 @@ button {
 	from {
 		opacity: 0;
 	}
+
 	to {
 		opacity: 1;
 	}
@@ -155,6 +156,7 @@ button {
 		opacity: 0;
 		transform: translateY(-6px) scale(.98);
 	}
+
 	to {
 		opacity: 1;
 		transform: translateY(0) scale(1);
@@ -162,6 +164,7 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
 	.icon-spinner,
 	.access-modal-backdrop,
 	.access-modal {

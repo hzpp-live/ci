@@ -1,11 +1,5 @@
+import { Check, ChevronsDownUp, ChevronsUpDown, KeyRound, X, } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-	Check,
-	ChevronsDownUp,
-	ChevronsUpDown,
-	KeyRound,
-	X,
-} from 'lucide-react';
 
 export type Workflow = {
 	id: number;
@@ -71,20 +65,17 @@ const Icon = ({
 };
 
 export function age(value: string) {
-	const seconds = Math.max(
-		0,
-		Math.floor((Date.now() - new Date(value).getTime()) / 1000),
-	);
+	const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+
 	if (seconds < 60) return `${seconds}s`;
 	if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-	if (seconds < 86400)
-		return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+	if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+
 	return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
 }
 
 export function tone(workflow: Workflow) {
-	if (['in_progress', 'queued', 'waiting'].includes(workflow.status))
-		return 'active';
+	if (['in_progress', 'queued', 'waiting'].includes(workflow.status)) return 'active';
 	if (workflow.conclusion === 'success') return 'success';
 	if (workflow.conclusion) return 'failure';
 	return 'quiet';
@@ -121,25 +112,24 @@ export function StatusIcon({ workflow }: { workflow: Workflow }) {
 export function App({ logoUrl }: { logoUrl: string }) {
 	const [data, setData] = useState<Dashboard>(blank);
 	const [allOpen, setAllOpen] = useState(true);
-	const [accessModalOpen, setAccessModalOpen] = useState(false);
+	
 	const [accessInput, setAccessInput] = useState('');
 	const [accessInvalid, setAccessInvalid] = useState(false);
 	const [accessChecking, setAccessChecking] = useState(false);
+	const [accessModalOpen, setAccessModalOpen] = useState(false);
+
 	const accessButtonRef = useRef<HTMLButtonElement>(null);
-	const [accessEnabled, setAccessEnabled] = useState(() =>
-		Boolean(localStorage.getItem('CI_ACCESS_SECRET')),
-	);
+	const [accessEnabled, setAccessEnabled] = useState(() => Boolean(localStorage.getItem('CI_ACCESS_SECRET')));
 
 	const load = useCallback(async () => {
 		try {
 			const accessSecret = localStorage.getItem('CI_ACCESS_SECRET');
-			const headers = accessSecret
-				? { 'x-ci-access-secret': accessSecret }
-				: undefined;
+			const headers = accessSecret ? { 'x-ci-access-secret': accessSecret } : undefined;
 			const response = await fetch('/api/state', {
 				cache: 'no-store',
 				headers,
 			});
+
 			if (response.ok) setData((await response.json()) as Dashboard);
 		} catch {
 			// Keep the last good snapshot while the connection recovers.
@@ -148,9 +138,11 @@ export function App({ logoUrl }: { logoUrl: string }) {
 
 	useEffect(() => {
 		void load();
+
 		const events = new EventSource('/api/events');
 		events.onopen = () => void load();
 		events.onmessage = () => void load();
+
 		return () => {
 			events.close();
 		};
@@ -166,6 +158,7 @@ export function App({ logoUrl }: { logoUrl: string }) {
 			setAccessModalOpen(false);
 			accessButtonRef.current?.focus();
 		};
+
 		document.addEventListener('keydown', closeOnEscape);
 		return () => document.removeEventListener('keydown', closeOnEscape);
 	}, [accessModalOpen]);
@@ -180,6 +173,7 @@ export function App({ logoUrl }: { logoUrl: string }) {
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ secret: accessInput }),
 			});
+
 			const result = (await response.json()) as AccessValidationResponse;
 
 			if (!response.ok || !result.valid) {
@@ -201,10 +195,8 @@ export function App({ logoUrl }: { logoUrl: string }) {
 	};
 
 	const groups = useMemo(() => {
-		const map = new Map<
-			string,
-			{ id: string; name: string; workflows: Workflow[] }
-		>();
+		const map = new Map<string, { id: string; name: string; workflows: Workflow[] }>();
+
 		for (const repository of data.repositories) {
 			map.set(repository.id, {
 				id: repository.id,
@@ -212,17 +204,13 @@ export function App({ logoUrl }: { logoUrl: string }) {
 				workflows: [],
 			});
 		}
+
 		for (const workflow of data.workflows) {
 			const group = map.get(workflow.repositoryId);
-			if (group) {
-				group.workflows.push(workflow);
-			}
+			if (group) group.workflows.push(workflow);
 		}
 
-		return [...map.values()]
-			.sort(
-				(a, b) => b.name.length - a.name.length || a.name.localeCompare(b.name),
-			);
+		return [...map.values()].sort((a, b) => b.name.length - a.name.length || a.name.localeCompare(b.name));
 	}, [data.repositories, data.workflows]);
 
 	return (
@@ -375,10 +363,8 @@ export function App({ logoUrl }: { logoUrl: string }) {
 
 export function WorkflowRow({ workflow }: { workflow: Workflow }) {
 	const kind = tone(workflow);
-	const percentage =
-		workflow.progress == null
-			? 0
-			: Math.max(0, Math.min(100, workflow.progress));
+	const percentage = workflow.progress == null ? 0 : Math.max(0, Math.min(100, workflow.progress));
+
 	return (
 		<div className='workflow-row'>
 			<div className='workflow-cell'>

@@ -3,11 +3,14 @@ import { z } from 'zod';
 const EnvironmentSchema = z.object({
 	VITE_LOGO_URL: z.url(),
 	VITE_FAVICON_URL: z.url(),
+
 	GITHUB_APP_ID: z.coerce.number().int().positive(),
 	GITHUB_APP_INSTALLATION_ID: z.coerce.number().int().positive(),
 	GITHUB_APP_PRIVATE_KEY: z.string().trim().min(1),
+	
 	GITHUB_WEBHOOK_SECRET: z.string().trim().min(16),
 	DASHBOARD_ACCESS_SECRET: z.string().trim().min(16),
+	
 	PUBLIC_URL: z.url(),
 	REPOSITORIES_JSON: z.string().trim().min(1).max(100_000),
 	POLL_INTERVAL_MS: z.coerce.number().int().min(1000).default(300000),
@@ -35,6 +38,7 @@ export const RepositoryConfigSchema = z
 					message: `Duplicate repository: ${repo}`,
 				});
 			}
+
 			seen.add(repo);
 		}
 	});
@@ -58,9 +62,7 @@ function parseJson(value: string): unknown {
 	}
 }
 
-const repositories = RepositoryConfigSchema.safeParse(
-	parseJson(config.REPOSITORIES_JSON),
-);
+const repositories = RepositoryConfigSchema.safeParse(parseJson(config.REPOSITORIES_JSON));
 if (!repositories.success) {
 	console.error('Invalid REPOSITORIES_JSON configuration:');
 	console.error(z.prettifyError(repositories.error));
@@ -72,5 +74,3 @@ export const repositoryConfig = repositories.data;
 export const AccessValidationSchema = z.object({
 	secret: z.string().trim().min(1),
 });
-
-export const dashboardAccessSecret = config.DASHBOARD_ACCESS_SECRET;

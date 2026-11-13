@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --import=tsx server/index.ts",
-    "start": "node --env-file-if-exists=.env --import=tsx server/index.ts",
+    "dev": "node --import=tsx scripts/run.mjs",
+    "start": "node --import=tsx scripts/run.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false"

@@ -1,8 +1,6 @@
 # CI
 
-Small dashboard for the latest GitHub Actions run of every workflow in configured private repositories.
-
-It shows status, progress, and timing. It never fetches or displays logs.
+Dashboard for the latest GitHub Actions run of every workflow in configured private repositories. It shows status, progress, and timing; logs are never fetched.
 
 ## Local setup
 
@@ -13,13 +11,19 @@ pnpm install
 pnpm dev
 ```
 
-Open `http://localhost:5173`.
+Open `http://localhost:3000`.
 
 ## Environment
 
 For local development, copy `.env.example` to `.env` and fill in the values.
 
 ```env
+PORT=3000
+PUBLIC_URL=https://ci.example.com
+POLL_INTERVAL_MS=300000
+VITE_LOGO_URL=https://example.com/logo.webp
+VITE_FAVICON_URL=https://example.com/favicon.ico
+
 GITHUB_APP_ID=123456
 GITHUB_APP_INSTALLATION_ID=12345678
 GITHUB_APP_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\nreplace_me\n-----END PRIVATE KEY-----
@@ -30,13 +34,9 @@ REPOSITORIES_JSON=[{"repo":"owner/private-repository","name":"Display name"}]
 
 `REPOSITORIES_JSON` must be a JSON array. The repository path is used only by the server for GitHub requests. It is not returned to the browser.
 
-Never commit `.env`.
-
 ## Create the GitHub App
 
-GitHub requires an owner approval to create and install an App. Use the [GitHub App creation page](https://github.com/settings/apps/new) or read GitHub's [manifest registration guide](https://docs.github.com/en/apps/sharing-github-apps/registering-github-app-from-a-manifest).
-
-The following matches the fields shown on GitHub's **Create GitHub App** page.
+Use the [GitHub App creation page](https://github.com/settings/apps/new). The [manifest registration guide](https://docs.github.com/en/apps/sharing-github-apps/registering-github-app-from-a-manifest) explains GitHub's alternative setup flow.
 
 ### Basic information
 
@@ -76,7 +76,7 @@ Enable only these repository events:
 - `Workflow run`
 - `Workflow job`
 
-These events let the server refresh the in-memory state as soon as a run or job changes. The server still performs a periodic reconciliation using `POLL_INTERVAL_MS`, which repairs missed deliveries and detects changes that happened while the server was offline.
+The server also reconciles periodically using `POLL_INTERVAL_MS` in case a delivery is missed.
 
 ### Finish creation and installation
 
@@ -88,13 +88,13 @@ These events let the server refresh the in-memory state as soon as a run or job 
 6. Copy the numeric installation ID from the installation URL or GitHub App installation page into `GITHUB_APP_INSTALLATION_ID`.
 7. Confirm the App's webhook URL, secret, selected events, and SSL verification.
 
-The installation ID identifies the installation used by this server. It is different from the App ID. Installing the App on **All repositories** does not make the dashboard show all repositories: the server still requests and returns only the repositories listed in `REPOSITORIES_JSON`.
+The installation ID is different from the App ID. Installing the App on **All repositories** does not make the dashboard show all repositories; CI still reads only `REPOSITORIES_JSON`.
 
-After that, the server signs a short-lived App JWT, exchanges it for an installation token, caches that token until shortly before expiry, and uses it for GitHub API requests. No personal access token is used.
+The server uses short-lived installation tokens. No personal access token is required.
 
-### Optional manifest setup
+### Manifest setup
 
-GitHub's manifest flow can prefill most App fields, but it still requires a callback endpoint that exchanges GitHub's temporary code for the App credentials. This project does not currently implement that one-time callback, so use the normal creation form above. Do not paste a private key or webhook secret into a public manifest, issue, URL, or README.
+The [GitHub App manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-github-app-from-a-manifest) requires a temporary callback to exchange the manifest code for App credentials. CI does not implement that callback, so use the normal creation form above.
 
 On the server, start the image published by GitHub Actions:
 
@@ -105,7 +105,14 @@ docker compose pull
 docker compose up -d
 ```
 
-`CI_ENV_FILE` only selects the Compose env file. It is not passed into the container.
+Use `CI_ENV_FILE` to select a local env file when starting the server directly. Docker Compose uses the same variable to select its `env_file`:
+
+```powershell
+$env:CI_ENV_FILE = 'stack.env'
+pnpm start
+```
+
+If `CI_ENV_FILE` is not set, the server loads `.env`.
 
 ## GitHub webhook
 
@@ -117,19 +124,13 @@ PUBLIC_URL=https://ci.example.com
 
 The webhook is configured on the GitHub App itself. The server does not create repository webhooks.
 
-The App needs Actions read-only and Metadata read-only permissions, plus the Workflow runs and Workflow jobs webhook events. Install it on the repositories listed in `REPOSITORIES_JSON`.
-
-Copy the App ID, installation ID, and private key into the deployment env file. The private key may use literal `\\n` characters or a multiline value.
-
 The webhook endpoint is:
 
 ```text
 https://ci.example.com/api/github/webhook
 ```
 
-The server validates the signature and delivery ID, rejects workflow events from repositories not listed in `REPOSITORIES_JSON`, rejects duplicate deliveries, and refreshes the cached state when a relevant configured workflow event arrives.
-
-GitHub's `ping` test event is acknowledged with `200 pong`; it does not trigger a GitHub API refresh. Workflow run and workflow job deliveries return success after invalidating the cached state and notifying connected browsers.
+The server validates the signature and delivery ID, rejects workflow events from repositories not listed in `REPOSITORIES_JSON`, rejects duplicate deliveries, and refreshes the cached state for configured workflow events. GitHub `ping` events return `200 pong`.
 
 ## Run links
 
