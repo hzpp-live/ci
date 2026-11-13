@@ -6,7 +6,7 @@ Dashboard for the latest GitHub Actions run of every workflow in configured priv
 
 Requirements: Node.js 24+ and pnpm 10+.
 
-```powershell
+```bash
 pnpm install
 pnpm dev
 ```
@@ -92,28 +92,6 @@ The installation ID is different from the App ID. Installing the App on **All re
 
 The server uses short-lived installation tokens. No personal access token is required.
 
-### Manifest setup
-
-The [GitHub App manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-github-app-from-a-manifest) requires a temporary callback to exchange the manifest code for App credentials. CI does not implement that callback, so use the normal creation form above.
-
-On the server, start the image published by GitHub Actions:
-
-```powershell
-Copy-Item .env.example .env
-docker login ghcr.io
-docker compose pull
-docker compose up -d
-```
-
-Use `CI_ENV_FILE` to select a local env file when starting the server directly. Docker Compose uses the same variable to select its `env_file`:
-
-```powershell
-$env:CI_ENV_FILE = 'stack.env'
-pnpm start
-```
-
-If `CI_ENV_FILE` is not set, the server loads `.env`.
-
 ## GitHub webhook
 
 Set `PUBLIC_URL` to the deployed site origin:
@@ -122,9 +100,7 @@ Set `PUBLIC_URL` to the deployed site origin:
 PUBLIC_URL=https://ci.example.com
 ```
 
-The webhook is configured on the GitHub App itself. The server does not create repository webhooks.
-
-The webhook endpoint is:
+The webhook is configured on the GitHub App itself. The server does not create repository webhooks. The webhook endpoint is:
 
 ```text
 https://ci.example.com/api/github/webhook
