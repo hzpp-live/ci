@@ -2,20 +2,9 @@
 
 Dashboard for the latest GitHub Actions run of every workflow in configured private repositories. It shows status, progress, and timing; logs are never fetched.
 
-## Local setup
-
-Requirements: Node.js 24+ and pnpm 10+.
-
-```bash
-pnpm install
-pnpm dev
-```
-
-Open `http://localhost:3000`.
-
 ## Environment
 
-For local development, copy `.env.example` to `.env` and fill in the values.
+For development, copy `.env.example` to `.env` and fill in the values.
 
 ```env
 PORT=3000
