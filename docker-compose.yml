@@ -1,0 +1,12 @@
+services:
+  app:
+    init: true
+    image: ghcr.io/hzpp-live/ci:latest
+    container_name: hzpp-ci
+    restart: unless-stopped
+    network_mode: bridge
+    pull_policy: always
+    ports:
+      - ${PORT:-3000}:3000
+    env_file:
+      - ${CI_ENV_FILE:-.env}
